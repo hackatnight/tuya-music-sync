@@ -1,0 +1,15 @@
+# Private: strip local keys and device details
+devices.json
+snapshot.json
+tinytuya.json
+tuya-raw.json
+
+# Private: the server's self-signed HTTPS certificate and key (made on first run)
+cert.pem
+key.pem
+
+# Personal logs and temporary files
+sniff_log.jsonl
+login_qr.png
+__pycache__/
+*.pyc

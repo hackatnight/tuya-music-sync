@@ -1,0 +1,1185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d12">
+<title>Strip Sync</title>
+<style>
+  :root {
+    --bg: #0d0d12; --panel: #17171f; --line: #2a2a36; --text: #ececf1;
+    --muted: #8b8b9a; --accent: #8b7bff; --ok: #4ade80; --bad: #f87171;
+    --glow: rgb(40, 40, 60);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  /* Layout: one column on phones, two on tablets/small windows, three on wide
+     screens. Meter and spectrum heights follow the window height. */
+  :root { --preview-h: clamp(110px, 17vh, 200px); --spec-h: clamp(100px, 18vh, 260px);
+          --meter-h: clamp(120px, 22vh, 300px); }
+  main { max-width: 560px; margin: 0 auto; padding: 16px 16px 40px;
+         display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  h1 { font-size: 20px; margin: 4px 0 4px; display: flex; align-items: center; gap: 10px; grid-column: 1 / -1; }
+  @media (min-width: 820px) {
+    main { max-width: 1240px; padding: 20px 24px 40px; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+    .stage { grid-row: span 2; position: sticky; top: 16px; }
+  }
+  @media (min-width: 1280px) {
+    main { max-width: 1760px; grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr) minmax(300px, 0.85fr); }
+    .stage { grid-row: auto; }
+  }
+  @media (min-width: 820px) and (min-height: 900px) {
+    :root { --preview-h: clamp(150px, 20vh, 260px); --meter-h: clamp(180px, 28vh, 380px); }
+  }
+  #conn { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+  #conn.on { background: var(--ok); }
+
+  #preview { height: var(--preview-h); border-radius: 18px; position: relative;
+             background: var(--glow); box-shadow: 0 0 60px 4px var(--glow); overflow: hidden; }
+  #preview.fade { transition: background 350ms ease-out, box-shadow 350ms ease-out; }
+  #meter { position: absolute; left: 0; bottom: 0; height: 5px; width: 0;
+           background: rgba(255,255,255,.85); }
+  #bpm { position: absolute; top: 10px; left: 14px; font-size: 13px;
+         color: rgba(255,255,255,.8); font-variant-numeric: tabular-nums; }
+  #dots { position: absolute; top: 10px; right: 12px; display: flex; gap: 6px; }
+  #dots span { font-size: 10px; font-weight: 700; letter-spacing: .05em; padding: 3px 6px;
+               border-radius: 6px; background: rgba(0,0,0,.45); color: #fff; opacity: .15;
+               transition: opacity 80ms; }
+  .eq canvas { width: 100%; display: block; background: #050507; border-radius: 10px; }
+  #spec { height: var(--spec-h); }
+  .bands { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+  @media (max-width: 560px) { .bands { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 12px; } }
+  .band { display: grid; grid-template-columns: 1fr 22px; grid-template-rows: var(--meter-h) auto; gap: 5px 2px; min-width: 0; }
+  .band canvas { height: var(--meter-h); min-width: 0; }
+  .band input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 22px; height: var(--meter-h); margin: 0; }
+  .band .bl { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 2px; font-size: 10px;
+              font-weight: 700; letter-spacing: .03em; color: var(--muted); font-family: ui-monospace, Consolas, monospace;
+              cursor: pointer; user-select: none; padding: 4px 2px; border-radius: 6px; background: #22222c; }
+  .band .bl.on { color: var(--text); background: #2e2a4a; }
+  .band .bl:not(.on) { opacity: .5; }
+  #hint { position: absolute; inset: 0; display: grid; place-items: center;
+          color: rgba(255,255,255,.75); font-size: 14px; text-align: center; padding: 0 20px; }
+
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 14px; padding: 14px; }
+  section > h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
+                 letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+  .seg.wrap { grid-auto-flow: row; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+  button { font: inherit; color: var(--text); background: #22222c; border: 1px solid var(--line);
+           border-radius: 10px; padding: 8px 6px; cursor: pointer; min-height: 44px; line-height: 1.2; min-width: 0; }
+  button:hover { border-color: #444456; }
+  button.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.big { width: 100%; font-weight: 600; font-size: 16px; }
+  button.big.stop { background: #3a1f26; border-color: #5c2a35; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.hdr { margin-left: auto; font-size: 15px; font-weight: 600; padding: 8px 22px;
+               background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.hdr.stop { background: #3a1f26; border-color: #5c2a35; }
+
+  .row { display: grid; grid-template-columns: 110px 1fr 44px; align-items: center;
+         gap: 10px; margin: 8px 0; }
+  .row label { color: var(--muted); }
+  .row output { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+
+  .dev { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .dev input { width: 20px; height: 20px; accent-color: var(--accent); }
+  .dev .st { margin-left: auto; font-size: 12px; color: var(--muted); max-width: 55%;
+             text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dev .st.ok { color: var(--ok); }
+  .dev .st.err { color: var(--bad); }
+  .small { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span id="conn" title="server connection"></span> Strip Sync
+    <button id="start2" class="hdr">Start</button></h1>
+
+  <div class="col stage">
+  <div id="preview"><div id="hint">Pick an audio source and press Start</div>
+    <div id="bpm"></div><div id="meter"></div>
+    <div id="dots"><span id="dot-kick">KICK</span><span id="dot-mid">MID</span><span id="dot-snare">SNARE</span><span id="dot-hat">HAT</span></div></div>
+
+  <section class="eq">
+    <h2>EQ</h2>
+    <canvas id="spec"></canvas>
+    <div class="bands" id="bands"></div>
+    <p class="small">Eight bands from deep sub-bass (left) to treble "air" (right). Each meter shows how hard that band is hitting; reaching red is a hit. Slide up to make a band trigger more easily, down for less. Tap a band's name to switch it on or off as a light trigger (dimmed = off).</p>
+  </section>
+  </div>
+
+  <div class="col controls">
+  <section>
+    <h2>Audio source</h2>
+    <div class="seg" id="source">
+      <button data-v="system" id="sysBtn">PC sound</button>
+      <button data-v="mic" class="sel">Microphone</button>
+    </div>
+    <p class="small" id="srcNote"></p>
+    <div class="row" id="micRow" style="display:none;grid-template-columns:110px 1fr"><label for="micSel">Mic</label>
+      <select id="micSel" style="font:inherit;color:var(--text);background:#22222c;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0"></select></div>
+    <div style="margin-top:10px"><button class="big" id="start">Start</button></div>
+  </section>
+
+  <section>
+    <h2>Effect</h2>
+    <div class="seg wrap" id="mode">
+      <button data-v="pulse" class="sel">Beat pulse</button>
+      <button data-v="bands">Drum colours</button>
+      <button data-v="strobe">Strobe</button>
+      <button data-v="ping">Ping-pong</button>
+      <button data-v="swap">Colour swap</button>
+      <button data-v="vu">VU meter</button>
+      <button data-v="breathe">Bass breathe</button>
+      <button data-v="fire">Fire</button>
+      <button data-v="spectrum">Spectrum</button>
+      <button data-v="wave">Colour wave</button>
+    </div>
+    <h2 style="margin-top:14px">Segment effects</h2>
+    <div class="seg wrap" id="mode2">
+      <button data-v="eqbar">EQ bar</button>
+      <button data-v="specbar">Spectrum bar</button>
+      <button data-v="stream">Beat stream</button>
+      <button data-v="anim">Built-in</button>
+    </div>
+    <p class="small" id="modeNote"></p>
+    <div id="visRow">
+      <div class="seg" id="layout" style="margin-top:8px">
+        <button data-v="end" class="sel">From controller</button>
+        <button data-v="centre">From centre</button>
+      </div>
+      <div class="row"><label for="visseg">Visible segments</label><input id="visseg" type="range" min="2" max="15" value="10"><output></output></div>
+    </div>
+    <div id="animRows">
+      <div class="seg wrap" id="anim" style="margin-top:8px">
+        <button data-v="1" class="sel">Effect 1</button>
+        <button data-v="2">Effect 2</button>
+        <button data-v="3">Effect 3</button>
+        <button data-v="4">Effect 4</button>
+        <button data-v="11">Effect 5</button>
+      </div>
+      <div class="seg" id="dir" style="margin-top:6px">
+        <button data-v="fwd" class="sel">Forward</button>
+        <button data-v="rev">Reverse</button>
+      </div>
+      <div class="seg" id="refire" style="margin-top:6px">
+        <button data-v="kick">New on every kick</button>
+        <button data-v="bar" class="sel">Every 4 kicks</button>
+        <button data-v="never">Never</button>
+      </div>
+      <div class="seg" id="pulse" style="margin-top:6px">
+        <button data-v="on">Pulse on kicks</button>
+        <button data-v="off" class="sel">Steady</button>
+      </div>
+      <div class="row"><label for="aspeed">Speed</label><input id="aspeed" type="range" min="5" max="100" value="60"><output></output></div>
+    </div>
+    <h2 style="margin-top:14px">Lights follow</h2>
+    <div class="seg" id="focus">
+      <button data-v="beat" class="sel">Main beat</button>
+      <button data-v="accents">Beat + accents</button>
+      <button data-v="all">Every sound</button>
+    </div>
+    <p class="small" style="margin-top:6px" id="focusNote"></p>
+    <h2 style="margin-top:14px">React to</h2>
+    <div class="seg" id="listen">
+      <button data-v="kick">Kick only</button>
+      <button data-v="snare">Kick + snare</button>
+      <button data-v="all">Everything</button>
+    </div>
+    <p class="small" style="margin-top:6px">Presets for the band switches under the EQ meters: you can also tap the band names there.</p>
+    <h2 style="margin-top:14px">Colour</h2>
+    <div class="seg" id="cmode">
+      <button data-v="solid">Solid colour</button>
+      <button data-v="slow" class="sel">Slow fade</button>
+      <button data-v="beat">Change on beat</button>
+    </div>
+    <div class="row" id="pickRow"><label for="pick">Colour</label><input id="pick" type="color" value="#ff2050" style="width:100%;height:36px;border:0;background:none"><output></output></div>
+    <div class="row" id="fspeedRow"><label for="fspeed">Fade time (s)</label><input id="fspeed" type="range" min="10" max="300" value="60"><output></output></div>
+    <div class="row"><label for="sens">Sensitivity</label><input id="sens" type="range" min="1" max="100" value="50"><output></output></div>
+    <div class="row"><label for="maxb">Brightness</label><input id="maxb" type="range" min="5" max="100" value="100"><output></output></div>
+    <div class="row"><label for="floor">Base glow</label><input id="floor" type="range" min="1" max="60" value="8"><output></output></div>
+    <div class="row"><label for="sat">Saturation</label><input id="sat" type="range" min="0" max="100" value="100"><output></output></div>
+    <div class="row" id="hstepRow"><label for="hstep">Colour step</label><input id="hstep" type="range" min="0" max="180" value="30"><output></output></div>
+    <h2 style="margin-top:14px">Timing</h2>
+    <div class="seg" id="predict">
+      <button data-v="on" class="sel">Beat prediction on</button>
+      <button data-v="off">Off (react only)</button>
+    </div>
+    <div class="row"><label for="lightlat">Light latency (ms)</label><input id="lightlat" type="range" min="0" max="300" value="120"><output></output></div>
+    <p class="small">Prediction locks onto steady kicks ("LOCKED" by the BPM) and fires each flash early by the light latency so it lands on the beat. Set the latency with the Sync test: raise it until the flashes land on the clicks.</p>
+    <div class="row"><label for="lag">Delay (ms)</label><input id="lag" type="range" min="0" max="400" value="0"><output></output></div>
+    <p class="small">Fade time: seconds for one trip round the rainbow. Colour step: how far the colour moves on each beat. Delay: if the lights run ahead of the sound (e.g. Bluetooth speakers), add delay.</p>
+  </section>
+  </div>
+
+  <div class="col side">
+  <section>
+    <h2>Sync test</h2>
+    <p class="small" style="margin-top:0">Plays a click at 120 BPM from this device's speakers and flashes the strips exactly on each click, so you can see whether the strips keep time.</p>
+    <div class="seg" id="dp" style="margin-top:10px">
+      <button data-v="24" class="sel">Colour mode</button>
+      <button data-v="28">Music mode A</button>
+      <button data-v="27">Music mode B</button>
+    </div>
+    <div class="seg" id="tfade" style="margin-top:6px">
+      <button data-v="flash" class="sel">Flash only</button>
+      <button data-v="fade">Flash + fade</button>
+    </div>
+    <div class="seg" id="tcol" style="margin-top:6px">
+      <button data-v="one" class="sel">One colour</button>
+      <button data-v="two">Two colours</button>
+    </div>
+    <div style="margin-top:10px"><button class="big" id="testBtn">Start sync test</button></div>
+    <p class="small">Use Colour mode. The music modes switch on the strips' own built-in-mic effect, which changes colours by itself. The method applies to music sync too, and the Delay slider above also shifts the test flashes.</p>
+  </section>
+
+  <section>
+    <h2>Strips</h2>
+    <div id="devs"><p class="small">Connecting to server…</p></div>
+    <div class="seg" style="margin-top:8px">
+      <button data-cmd="on">On</button><button data-cmd="white">White</button><button data-cmd="off">Off</button>
+    </div>
+  </section>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const S = { source: 'mic', mode: 'pulse', running: false, targets: null, dp: '24', tfade: 'flash', tcol: 'one', cmode: 'slow', listen: 'snare', anim: '1', dir: 'fwd', pulse: 'off', refire: 'bar', layout: 'end', predict: 'on', focus: 'beat', anchor: 'kick' };
+let ws, devices = [];
+
+// ---------------------------------------------------------------- bands
+// Eight detection bands, sub-bass to air. "group" says what each counts as for
+// the effects: kick (full flash, drives the beat), mid (melody/bassline),
+// snare, hat (sparkle). weight is its say in the tempo estimate.
+const BAND_DEFS = [
+  { id: 'sub',  name: 'SUB',  lo: 30,    hi: 60,    gap: 250, k: 0,   group: 'kick',  weight: 1.5, on: true },
+  { id: 'bass', name: 'BASS', lo: 60,    hi: 150,   gap: 220, k: 0,   group: 'kick',  weight: 2,   on: true },
+  { id: 'lmid', name: 'LMID', lo: 150,   hi: 400,   gap: 160, k: 0.2, group: 'mid',   weight: 1,   on: false },
+  { id: 'mid',  name: 'MID',  lo: 400,   hi: 1000,  gap: 140, k: 0.3, group: 'mid',   weight: 0.8, on: false },
+  { id: 'umid', name: 'UMID', lo: 1000,  hi: 2500,  gap: 150, k: 0.2, group: 'snare', weight: 1.5, on: true },
+  { id: 'pres', name: 'PRES', lo: 2500,  hi: 5000,  gap: 130, k: 0.3, group: 'snare', weight: 1,   on: true },
+  { id: 'bril', name: 'BRIL', lo: 5000,  hi: 10000, gap: 100, k: 0.4, group: 'hat',   weight: 0.5, on: false },
+  { id: 'air',  name: 'AIR',  lo: 10000, hi: 16000, gap: 100, k: 0.5, group: 'hat',   weight: 0.3, on: false },
+];
+$('#bands').innerHTML = BAND_DEFS.map(b =>
+  `<div class="band"><canvas id="m-${b.id}"></canvas>` +
+  `<input id="bs_${b.id}" type="range" min="0" max="100" value="50" aria-label="${b.name} sensitivity">` +
+  `<div class="bl" data-band="${b.id}" title="${b.lo}–${b.hi} Hz: tap to switch on/off">${b.name} <output></output></div></div>`).join('');
+const PRESETS = { kick: ['sub', 'bass'], snare: ['sub', 'bass', 'umid', 'pres'], all: BAND_DEFS.map(b => b.id) };
+function markBands() {
+  document.querySelectorAll('.band .bl').forEach(el => el.classList.toggle('on', !!S.bandOn[el.dataset.band]));
+  const on = BAND_DEFS.filter(b => S.bandOn[b.id]).map(b => b.id).join();
+  S.listen = Object.keys(PRESETS).find(k => PRESETS[k].join() === on) || '';
+  document.querySelectorAll('#listen button').forEach(x => x.classList.toggle('sel', x.dataset.v === S.listen));
+}
+
+// ---------------------------------------------------------------- settings
+const SETTINGS = ['sens', 'maxb', 'floor', 'sat', 'hstep', 'lag', 'pick', 'fspeed', 'aspeed', 'visseg', 'lightlat',
+                  ...BAND_DEFS.map(b => 'bs_' + b.id)];
+S.bandOn = Object.fromEntries(BAND_DEFS.map(b => [b.id, b.on]));
+try {
+  const saved = JSON.parse(localStorage.getItem('stripsync3') || '{}');
+  SETTINGS.forEach(k => saved[k] != null && ($('#' + k).value = saved[k]));
+  if (saved.mode) S.mode = saved.mode;
+  if (saved.dp) S.dp = saved.dp;
+  if (saved.cmode) S.cmode = saved.cmode;
+  if (saved.bandOn) Object.assign(S.bandOn, saved.bandOn);
+  for (const k of ['anim', 'dir', 'pulse', 'refire', 'layout', 'predict', 'focus']) if (saved[k]) S[k] = saved[k];
+} catch {}
+function save() {
+  try {
+    const o = { mode: S.mode, dp: S.dp, cmode: S.cmode, bandOn: S.bandOn, anim: S.anim, dir: S.dir, pulse: S.pulse, refire: S.refire, layout: S.layout, predict: S.predict, focus: S.focus };
+    SETTINGS.forEach(k => o[k] = $('#' + k).value);
+    localStorage.setItem('stripsync3', JSON.stringify(o));
+  } catch {}
+}
+const num = k => +$('#' + k).value;
+const val = k => num(k) / 100;
+document.querySelectorAll('.row input, .band input').forEach(i => {
+  const out = i.parentElement.querySelector('output');
+  const upd = () => { out.textContent = i.value; save(); };
+  i.addEventListener('input', upd); upd();
+});
+function segment(id, key, onChange) {
+  const el = $('#' + id);
+  const mark = () => el.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.v === S[key]));
+  el.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b || b.disabled) return;
+    S[key] = b.dataset.v; mark(); save(); onChange && onChange();
+  });
+  mark();
+}
+const MODE_NOTES = {
+  pulse: 'Flashes on each hit and fades back down.',
+  bands: 'Kick = your colour, melody/bassline = a quarter turn round the colour wheel, snare = the opposite colour, hi-hats = white. Best with "Everything".',
+  strobe: 'Hard white-ish flash on each kick, dark in between.',
+  ping: 'Each beat lights the next strip in turn. Needs both strips ticked.',
+  swap: 'Two opposite colours trade places on every kick. With both strips, each strip shows one.',
+  vu: 'The whole strip is a level meter: green when quiet, yellow, then red when loud.',
+  breathe: 'Brightness rides the bassline smoothly instead of flashing.',
+  fire: 'Warm flicker that burns hotter as the music gets louder; kicks flare up.',
+  spectrum: 'Colour follows the sound: bass-heavy is red, bright and trebly is blue.',
+  wave: 'Colour drifts on its own and speeds up with the music.',
+};
+Object.assign(MODE_NOTES, {
+  eqbar: 'A level bar along the strip: it grows from the controller end, green to yellow to red, over a blue background.',
+  specbar: 'Each visible segment is a frequency band, bass at the controller end. Quiet = blue, then purple and pink, loud = red.',
+  stream: 'Your colours run along the strip with the rest dark; kicks fire a new stream and louder music runs faster.',
+  anim: 'The strip\'s own animations in your colours, sped up by the music and pulsing on kicks.',
+});
+function noteMode() {
+  $('#modeNote').textContent = MODE_NOTES[S.mode] || '';
+  ['#mode', '#mode2'].forEach(id => document.querySelectorAll(id + ' button')
+    .forEach(b => b.classList.toggle('sel', b.dataset.v === S.mode)));
+  $('#animRows').style.display = S.mode === 'stream' || S.mode === 'anim' ? '' : 'none';
+  $('#visRow').style.display = S.mode === 'eqbar' || S.mode === 'specbar' ? '' : 'none';
+  $('#anim').style.display = S.mode === 'anim' ? '' : 'none';
+  lastAnimKey = '';
+}
+segment('mode', 'mode', noteMode);
+segment('mode2', 'mode', noteMode);
+segment('anim', 'anim', noteMode);
+segment('dir', 'dir');
+segment('pulse', 'pulse');
+segment('refire', 'refire');
+segment('predict', 'predict');
+const FOCUS_NOTES = {
+  beat: 'One flash per beat, locked to the loudest repeating sound (usually the kick). Everything else is ignored.',
+  accents: 'The main beat, plus only the strongest snare / synth hits in between.',
+  all: 'Every band switched on below can trigger a flash.',
+};
+const noteFocus = () => $('#focusNote').textContent = FOCUS_NOTES[S.focus];
+segment('focus', 'focus', noteFocus);
+noteFocus();
+segment('layout', 'layout', () => { SPECBAR = []; });
+noteMode();
+$('#listen').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  for (const d of BAND_DEFS) S.bandOn[d.id] = PRESETS[b.dataset.v].includes(d.id);
+  markBands(); save();
+});
+$('#bands').addEventListener('click', e => {
+  const el = e.target.closest('.bl'); if (!el) return;
+  S.bandOn[el.dataset.band] = !S.bandOn[el.dataset.band];
+  markBands(); save();
+});
+markBands();
+segment('cmode', 'cmode', showColourRows);
+function showColourRows() {
+  $('#pickRow').style.display = S.cmode === 'solid' ? '' : 'none';
+  $('#fspeedRow').style.display = S.cmode === 'slow' ? '' : 'none';
+  $('#hstepRow').style.display = S.cmode === 'beat' ? '' : 'none';
+}
+showColourRows();
+segment('dp', 'dp');
+segment('tfade', 'tfade');
+segment('tcol', 'tcol');
+segment('source', 'source', () => { if (S.running) { stop(); start(); } noteSource(); });
+
+// PC-sound capture needs getDisplayMedia, which phones don't have.
+const canSystem = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) &&
+                  !/Android|iPhone|iPad/i.test(navigator.userAgent);
+if (!canSystem) $('#sysBtn').disabled = true;
+function noteSource() {
+  $('#srcNote').textContent = S.source === 'system'
+    ? 'Chrome/Edge will ask what to share: pick "Entire screen" and turn on "Share system audio". You can then switch to Spotify/YouTube - this keeps running in the background.'
+    : (canSystem ? 'Listens through the mic: works with any speaker in the room.'
+                 : 'Listens through the phone mic: works with music from the phone or any speaker nearby. Keep the screen on.');
+}
+noteSource();
+
+// ---------------------------------------------------------------- server link
+function connect() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.onopen = () => { $('#conn').classList.add('on'); };
+  ws.onclose = () => { $('#conn').classList.remove('on'); setTimeout(connect, 1500); };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'devices') renderDevices(m.devices);
+  };
+}
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ targets: S.targets, ...o })); }
+const activeStrips = () => S.targets || devices.map((_, i) => i);
+function renderDevices(list) {
+  const first = devices.length === 0;
+  devices = list;
+  const box = $('#devs');
+  if (!list.length) { box.innerHTML = '<p class="small">Demo mode: no strips configured. The preview above shows what they would do.</p>'; return; }
+  if (first || box.children.length !== list.length) {
+    box.innerHTML = list.map((d, i) => `<label class="dev"><input type="checkbox" checked data-i="${i}"><span></span><span class="st"></span></label>`).join('');
+    box.querySelectorAll('input').forEach(c => c.addEventListener('change', () => {
+      const on = [...box.querySelectorAll('input')].filter(x => x.checked).map(x => +x.dataset.i);
+      S.targets = on.length === list.length ? null : on;
+    }));
+  }
+  list.forEach((d, i) => {
+    const row = box.children[i];
+    row.children[1].textContent = d.name;
+    const st = row.children[2];
+    st.textContent = d.status === 'ok' ? 'connected' : d.status;
+    st.className = 'st ' + (d.status === 'ok' ? 'ok' : d.status.startsWith('error') ? 'err' : '');
+  });
+}
+setInterval(() => ws && ws.readyState === 1 && ws.send('{"type":"status"}'), 3000);
+document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => send({ type: 'cmd', cmd: b.dataset.cmd })));
+connect();
+
+// ---------------------------------------------------------------- audio
+// Analysis is paced by the audio clock, so it keeps running when this tab is
+// hidden (requestAnimationFrame would pause and the lights would stall).
+// The pacing comes from an AudioWorklet on the audio thread that just posts
+// "512 more samples" messages; the analysis itself runs here. Unlike the old
+// ScriptProcessor, the audio thread never waits for this page, so a busy
+// moment here can't make Chrome's audio (the music in another tab) skip.
+let ctx, analyser, proc, sink, stream, freq, timeBuf;
+const TICKER = `class Ticker extends AudioWorkletProcessor {
+  constructor() { super(); this.n = 0; }
+  process() {
+    this.n += 128;                                   // render quantum
+    if (this.n >= 512) { this.n -= 512; this.port.postMessage(currentTime); }
+    return true;
+  }
+}
+registerProcessor('ticker', Ticker);`;
+async function startTicker(src) {
+  if (ctx.audioWorklet && window.AudioWorkletNode) {
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([TICKER], { type: 'application/javascript' })));
+    proc = new AudioWorkletNode(ctx, 'ticker');
+    proc.port.onmessage = e => {
+      // if this page fell well behind, skip stale blocks instead of replaying
+      // them (the analyser only holds the latest audio anyway); tempo fills the gap
+      if (ctx.currentTime - e.data > 0.1) return;
+      tick({ playbackTime: e.data });
+    };
+  } else {                                           // very old browsers
+    proc = ctx.createScriptProcessor(512, 1, 1);
+    proc.onaudioprocess = tick;
+  }
+  src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+}
+async function start() {
+  try {
+    if (S.source === 'system') {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      if (!stream.getAudioTracks().length) {
+        stream.getTracks().forEach(t => t.stop());
+        throw new Error('No audio was shared. Try again and turn on "Share system audio" (or "Share tab audio").');
+      }
+      stream.getVideoTracks().forEach(t => t.stop());  // only the sound is needed
+    } else {
+      if (!navigator.mediaDevices) throw new Error('Microphone needs a secure page: open the https:// address the server printed.');
+      stream = await openMic(S.micId);
+      // A Bluetooth speaker's own mic puts it into call mode and cuts the music,
+      // so if that's what we got, switch to the phone's built-in mic.
+      const inputs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+      const isBT = l => /bluetooth|headset|hands-?free|\bbt\b|sco/i.test(l || '');
+      const cur = stream.getAudioTracks()[0];
+      if (!S.micId && isBT(cur.label)) {
+        const builtIn = inputs.find(d => !isBT(d.label) && d.deviceId !== 'default');
+        if (builtIn) { stream.getTracks().forEach(t => t.stop()); stream = await openMic(builtIn.deviceId); }
+      }
+      fillMics(inputs, stream.getAudioTracks()[0].getSettings().deviceId);
+    }
+  } catch (e) { $('#hint').textContent = e.message || String(e); return; }
+
+  // default (interactive) latency: a 'playback' hint delivers audio in big
+  // bursts, which smears onset timing and threw the tempo off by ~6% in testing
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ctx.createMediaStreamSource(stream);
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0;
+  sink = ctx.createGain(); sink.gain.value = 0;   // the ticker must reach the output to run; silent
+  freq = new Float32Array(analyser.frequencyBinCount);
+  timeBuf = new Float32Array(analyser.fftSize);
+  src.connect(analyser);
+  await startTicker(src);
+  Object.assign(TEMPO, { n: 0, period: 0, cand: 0, candN: 0, last: 0, firstBlk: 0 });   // fresh tempo for a fresh start
+  for (const b of BANDS) Object.assign(b, { hist: [], f1: 0, f2: 0, last: 0, peakLvl: 0, adds: [] });
+  for (const g in GROUP_LAST) { GROUP_LAST[g] = 0; GROUP_TOP[g] = 0; }
+  for (const g in LOUDEST) LOUDEST[g] = 0;
+  S.anchor = 'kick';
+  prevSpec = null; prevPow = null;
+  Object.assign(BT, { period: 0, next: 0, conf: 0, iois: [], lastKick: 0, firedFor: 0 });
+  stream.getAudioTracks()[0].addEventListener('ended', stop);
+
+  S.running = true;
+  $('#start').textContent = 'Stop'; $('#start').classList.add('stop');
+  $('#hint').textContent = '';
+  try { navigator.wakeLock && (S.wake = await navigator.wakeLock.request('screen')); } catch {}
+  send({ type: 'cmd', cmd: 'on' });
+}
+function openMic(deviceId) {
+  return navigator.mediaDevices.getUserMedia({ audio: {
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}) } });
+}
+function fillMics(inputs, activeId) {
+  const sel = $('#micSel');
+  sel.innerHTML = inputs.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Microphone ' + (i + 1)}</option>`).join('');
+  sel.value = activeId;
+  $('#micRow').style.display = inputs.length > 1 ? 'grid' : 'none';
+}
+$('#micSel').addEventListener('change', () => {
+  S.micId = $('#micSel').value;
+  if (S.running) { stop(); start(); }
+});
+
+function stop() {
+  S.running = false;
+  if (proc) { proc.onaudioprocess = null; if (proc.port) proc.port.onmessage = null; }
+  stream && stream.getTracks().forEach(t => t.stop());
+  ctx && ctx.close();
+  S.wake && S.wake.release && S.wake.release();
+  $('#start').textContent = 'Start'; $('#start').classList.remove('stop');
+  $('#hint').textContent = 'Stopped';
+}
+$('#start').addEventListener('click', () => S.running ? stop() : start());
+$('#start2').addEventListener('click', () => S.running ? stop() : start());
+// keep the header button in step with the main one
+new MutationObserver(() => {
+  $('#start2').textContent = $('#start').textContent;
+  $('#start2').classList.toggle('stop', $('#start').classList.contains('stop'));
+}).observe($('#start'), { childList: true, attributes: true });
+
+// ---------------------------------------------------------------- analysis
+// Onsets are found per band with spectral flux: how much the spectrum rose
+// since the previous block (on a log scale), compared with that band's own
+// recent flux. Each band adapts on its own, so quiet hi-hats aren't drowned
+// out by a loud bassline. The eight bands are defined in BAND_DEFS.
+const BANDS = BAND_DEFS.map(b => ({ ...b, hist: [], f1: 0, f2: 0, last: 0 }));
+const GROUP_GAP = { kick: 250, mid: 180, snare: 250, hat: 110 };   // ms before a group can fire again
+const GROUP_LAST = { kick: 0, mid: 0, snare: 0, hat: 0 };
+const GROUP_TOP = { kick: 0, mid: 0, snare: 0, hat: 0 };
+const LOUDEST = { kick: 0, snare: 0, mid: 0 };    // average hit energy, to pick the beat's source
+const beatTimes = [];            // kick times, for the BPM readout
+const SPECBUF = [], POWBUF = [];
+let bufIdx = 0;
+let prevSpec = null, prevPow = null, hue = 0, peak = 0.05, lastCont = 0, lastOut = 0, lastKickOut = 0;
+const pending = [];              // scheduled fade steps, cancelled by the next hit
+
+function band(lo, hi) {          // linear energy between lo and hi Hz (analyser gives dB)
+  const hz = ctx.sampleRate / analyser.fftSize;
+  const a = Math.max(1, Math.floor(lo / hz)), b = Math.min(freq.length - 1, Math.ceil(hi / hz));
+  let s = 0; for (let i = a; i <= b; i++) s += Math.pow(10, freq[i] / 10);
+  return s / (b - a + 1);
+}
+
+function tick(e) {
+  if (!S.running) return;
+  // which audio block this is, from the audio clock: the browser drops the
+  // odd callback when busy, and tempo must count real time, not callbacks
+  const blk = Math.round(((e && e.playbackTime) || ctx.currentTime) * ctx.sampleRate / 512);
+  analyser.getFloatFrequencyData(freq);
+  analyser.getFloatTimeDomainData(timeBuf);
+  const now = performance.now();
+
+  let rms = 0; for (const v of timeBuf) rms += v * v;
+  rms = Math.sqrt(rms / timeBuf.length);
+  peak = Math.max(rms, peak * 0.998, 0.002);          // auto-gain, also works for quiet mic input
+  const loud = Math.min(1, rms / peak);
+
+  // log-magnitude spectrum, 0..1 (dB -100..0)
+  // two buffers each, alternating (this block / previous block), so nothing is
+  // allocated per block: less garbage collection, fewer busy moments
+  if (!SPECBUF[0] || SPECBUF[0].length !== freq.length)
+    for (let i = 0; i < 2; i++) { SPECBUF[i] = new Float32Array(freq.length); POWBUF[i] = new Float32Array(freq.length); }
+  const spec = SPECBUF[bufIdx], pow = POWBUF[bufIdx];
+  bufIdx ^= 1;
+  for (let i = 0; i < freq.length; i++) { spec[i] = Math.max(0, (freq[i] + 100) / 100); pow[i] = Math.pow(10, freq[i] / 10); }
+  const hz = ctx.sampleRate / analyser.fftSize;
+  const sens = val('sens');
+  const hits = {}, strength = {}, rise = {};
+  let onsetSum = 0, onsetReady = true;
+  for (const b of BANDS) {
+    const a = Math.max(1, Math.floor(b.lo / hz)), e = Math.min(spec.length - 1, Math.ceil(b.hi / hz));
+    let flux = 0, lvl = 0;
+    if (prevSpec) for (let i = a; i <= e; i++) flux += Math.max(0, spec[i] - prevSpec[i]);
+    for (let i = a; i <= e; i++) lvl += spec[i];
+    flux /= (e - a + 1); lvl /= (e - a + 1);
+    // gate: the band must be within ~30 dB of its recent loud hits, so hiss in
+    // a quiet break doesn't count as a hit once the adaptive threshold sinks
+    b.peakLvl = Math.max(lvl, (b.peakLvl || lvl) - 0.0004);
+    const gated = lvl < b.peakLvl - 0.3;
+    // adaptive threshold: mean + k*std of this band's last ~1.2 s
+    const h = b.hist, n = h.length;
+    const mean = n ? h.reduce((x, y) => x + y, 0) / n : 0;
+    const sd = n ? Math.sqrt(h.reduce((x, y) => x + (y - mean) ** 2, 0) / n) : 0;
+    // per-band EQ slider scales the trigger point: top = 0.6x (easier), bottom = 3x (harder)
+    const bs = val('bs_' + b.id);
+    const bandMul = bs < 0.5 ? Math.pow(3, (0.5 - bs) * 2) : Math.pow(0.6, (bs - 0.5) * 2);
+    const thr = (mean + Math.max(0.3, 2.6 - sens * 1.6 + b.k) * sd + 0.004) * bandMul;
+    // peak-pick: the previous block was a local maximum above threshold
+    strength[b.id] = Math.max(b.f1, flux) / (thr || 1);
+    // energy actually added in this band (linear power): which band a sound
+    // really lives in. On the log scale a click's leak into a near-silent
+    // band looks as big as the sound itself.
+    let add = 0;
+    if (prevPow) for (let i = a; i <= e; i++) add += Math.max(0, pow[i] - prevPow[i]);
+    // (summed, not averaged per bin: per bin, the 1-2 bin bass bands make any
+    // noisy sound's leak look like a kick)
+    // over the last ~40 ms: the parts of one sound don't all peak in the same block
+    b.adds = (b.adds || []); b.adds.push(add); if (b.adds.length > 4) b.adds.shift();
+    rise[b.id] = Math.max(...b.adds);
+    // towards tempo: each band normalised to itself and weighted (low end and
+    // snare range, which usually mark the beat, count most); wait for history
+    if (n > 30) onsetSum += Math.min(5, flux / (mean + 1e-4)) * b.weight;
+    else onsetReady = false;
+    if (n > 30 && !gated && b.f1 > thr && b.f1 >= b.f2 && b.f1 > flux && now - b.last > b.gap) hits[b.id] = true;
+    b.f2 = b.f1; b.f1 = flux;
+    h.push(flux); if (h.length > 110) h.shift();
+  }
+  if (prevSpec && onsetReady) tempoFeed(onsetSum, now, blk);
+  prevSpec = spec; prevPow = pow;
+  EQ.spec = spec; EQ.hz = hz;
+  for (const b of BANDS) EQ.str[b.id] = Math.max(EQ.str[b.id] || 0, strength[b.id]);
+  // Group band hits into what the effects use: kick / mid / snare / hat.
+  // Every sound spills into neighbouring bands, and each band is judged
+  // against its own history, so a lone synth stab can look like a "hit" in
+  // the bass band too. So a hit only counts for a group whose bands actually
+  // rose the most in absolute terms (dB), i.e. where the sound really is.
+  const G = { kick: 0, mid: 0, snare: 0, hat: 0 }, GR = { kick: 0, mid: 0, snare: 0, hat: 0 };
+  const raw = { kick: 0, mid: 0, snare: 0, hat: 0 };
+  for (const b of BANDS) {
+    GR[b.group] = Math.max(GR[b.group], rise[b.id]);
+    if (hits[b.id]) { raw[b.group] = 1; if (S.bandOn[b.id]) G[b.group] = 1; }
+  }
+  const topRise = Math.max(GR.kick, GR.mid, GR.snare, GR.hat);
+  const owns = g => GR[g] > 0 && GR[g] >= topRise * 0.5;   // within 3 dB of the strongest
+  for (const g of Object.keys(G)) {
+    GROUP_TOP[g] = Math.max(GR[g], GROUP_TOP[g] * 0.9993);           // the group's recent strong hits
+    if (!owns(g)) G[g] = 0;
+    // and within ~10 dB of those, so faint hiss in a quiet moment isn't a hit
+    if (G[g] && GR[g] < GROUP_TOP[g] * 0.1) G[g] = 0;
+    // a group can't re-fire on the tail of its own sound
+    if (G[g] && now - GROUP_LAST[g] < GROUP_GAP[g]) G[g] = 0;
+  }
+  // The beat follows the loudest repeating sound: whichever of kick / snare /
+  // mid hits hardest on average (usually the kick). Hats are too busy to be
+  // the beat. Switch only when another group is clearly louder.
+  const real = g => raw[g] && owns(g) && GR[g] >= GROUP_TOP[g] * 0.1;
+  for (const g of ['kick', 'snare', 'mid']) {
+    LOUDEST[g] *= 0.9995;
+    if (real(g)) LOUDEST[g] = LOUDEST[g] * 0.85 + GR[g] * 0.15;
+  }
+  const lead = ['kick', 'snare', 'mid'].reduce((a, b) => LOUDEST[b] > LOUDEST[a] ? b : a);
+  if (LOUDEST[lead] > LOUDEST[S.anchor] * 1.5 || !LOUDEST[S.anchor]) S.anchor = lead;
+  const beatHit = real(S.anchor);
+  for (const b of BANDS) if (hits[b.id]) b.last = now;
+
+  if (beatHit) { beatTimes.push(now); while (beatTimes.length > 9) beatTimes.shift(); }
+  const beatOn = S.focus !== 'all' || BAND_DEFS.some(b => b.group === S.anchor && S.bandOn[b.id]);
+  const beatFire = beatTrack(now, !!beatHit) && beatOn;   // predicted (early) or reactive beat
+  const kickFire = beatFire;
+  for (const g of Object.keys(G)) if (G[g]) GROUP_LAST[g] = now;
+  if (beatFire) onHit('kick');
+  else if (S.focus !== 'beat') {   // otherwise the group that reacted most strongly
+    let gs = ['snare', 'mid', 'hat'].filter(k => G[k] && k !== S.anchor);
+    // accents: only the strong ones (within ~3 dB of that group's loudest)
+    if (S.focus === 'accents') gs = gs.filter(k => k !== 'hat' && GR[k] >= GROUP_TOP[k] * 0.5);
+    const g = gs.sort((a, b) => GR[b] - GR[a])[0];
+    if (g) onHit(g);
+  }
+  if (!document.hidden) for (const b of BANDS) if (hits[b.id]) flashDot(b.id);
+  updateEnv(loud, spec, hz);
+  const fx = { ...hits, kick: kickFire };
+  if (PAINT.has(S.mode)) paintFx(now, spec, hz, fx);
+  else if (CONTINUOUS.has(S.mode)) continuous(now, loud, kickFire);
+
+  if (!document.hidden) {
+    $('#meter').style.width = (loud * 100).toFixed(0) + '%';
+    if (BT.conf >= LOCK) {
+      $('#bpm').textContent = Math.round(60000 / (TEMPO.period || BT.period)) + ' BPM · LOCKED';
+    } else if (TEMPO.period) {
+      $('#bpm').textContent = Math.round(60000 / TEMPO.period) + ' BPM';
+    } else if (beatTimes.length > 4) {
+      const gaps = beatTimes.slice(1).map((t, i) => t - beatTimes[i]).sort((a, b) => a - b);
+      $('#bpm').textContent = Math.round(60000 / gaps[gaps.length >> 1]) + ' BPM';
+    }
+  }
+}
+
+// ---------------------------------------------------------------- tempo
+// Tempo from the rhythm of all onsets, not just kicks: autocorrelate ~6 s of
+// onset strength and take the strongest repeat between 70 and 180 BPM,
+// leaning towards ~120 and rewarding lags whose double also repeats. Kick
+// gaps alone read half or double tempo whenever the kick isn't on every beat.
+const TEMPO = { buf: new Float32Array(750), n: 0, dt: 0, last: 0, period: 0, cand: 0, candN: 0 };
+function tempoFeed(v, now, blk) {
+  const T = TEMPO;
+  T.dt = 512 / ctx.sampleRate * 1000;            // ms per audio block
+  // blocks the browser skipped still took time: compare blocks received with
+  // blocks the audio clock says have passed, and fill only a real shortfall
+  // (the timestamps jitter, so block-to-block gaps alone over-count)
+  if (!T.firstBlk) T.firstBlk = blk - T.n;
+  const behind = Math.min(20, (blk - T.firstBlk) - T.n);
+  for (let i = 0; i < behind - 1; i++) { T.buf[T.n % T.buf.length] = 0; T.n++; }
+  T.buf[T.n % T.buf.length] = v; T.n++;
+  if (T.n < 300 || now - T.last < 500) return;    // need ~3 s; re-estimate twice a second
+  T.last = now;
+  const N = Math.min(T.n, T.buf.length), x = new Float32Array(N);
+  let mean = 0;
+  for (let i = 0; i < N; i++) { x[i] = T.buf[(T.n - N + i) % T.buf.length]; mean += x[i]; }
+  mean /= N;
+  for (let i = 0; i < N; i++) x[i] -= mean;      // signed, so onset-vs-gap alignments count against a lag
+  const acCache = new Map();
+  const ac = lag => {
+    lag = Math.round(lag);
+    if (lag >= N - 50) return 0;
+    if (!acCache.has(lag)) { let s = 0; for (let i = lag; i < N; i++) s += x[i] * x[i - lag]; acCache.set(lag, s / (N - lag)); }
+    return acCache.get(lag);
+  };
+  const lo = Math.floor(60000 / 180 / T.dt), hi = Math.ceil(60000 / 70 / T.dt);
+  let best = 0, bestScore = -Infinity;
+  const score = [];
+  for (let lag = lo; lag <= hi; lag++) {
+    const bpm = 60000 / (lag * T.dt);
+    const w = Math.exp(-0.5 * Math.pow(Math.log2(bpm / 120) / 1.0, 2));   // mild lean towards ~120 BPM
+    // comb: the real beat repeats at 1, 2, 3 and 4 beats; a 2/3 or 3/2 error doesn't
+    score[lag] = (ac(lag) + 0.7 * ac(2 * lag) + 0.5 * ac(3 * lag) + 0.4 * ac(4 * lag)) * w;
+    if (score[lag] > bestScore) { bestScore = score[lag]; best = lag; }
+  }
+  if (!best || bestScore <= 0) return;
+  // Tie-break between strong candidates with the kick: if the gap between
+  // kicks matches one of them, that's the beat (rhythms that put other
+  // sounds 1.5 beats after the kick otherwise make 2/3 tempo a strong rival).
+  if (BT.iois.length >= 4) {
+    const kickGap = [...BT.iois].sort((p, q) => p - q)[BT.iois.length >> 1];
+    const cands = [];
+    for (let lag = lo + 1; lag < hi; lag++)
+      if (score[lag] >= bestScore * 0.6 && score[lag] >= score[lag - 1] && score[lag] >= score[lag + 1]) cands.push(lag);
+    const match = cands.find(lag => Math.abs(lag * T.dt - kickGap) < kickGap * 0.06);
+    if (match) best = match;
+  }
+  // Precision: one block is ~10.7 ms, so a 1-beat lag can only say 127.8 or
+  // 130.8 BPM. Find the same peak k beats out (k = 8 when the buffer allows),
+  // interpolate it, and divide by k: k times finer.
+  const k = best * 8 < N - 150 ? 8 : best * 4 < N - 150 ? 4 : 1;
+  let pk = best * k;
+  for (let l = Math.round(best * k - k); l <= Math.round(best * k + k); l++) if (ac(l) > ac(pk)) pk = l;
+  const a = ac(pk - 1), b0 = ac(pk), c = ac(pk + 1);
+  const d = (a - c) / (2 * (a - 2 * b0 + c) || 1);
+  const period = (pk + Math.max(-0.5, Math.min(0.5, d))) / k * T.dt;
+  // adopt a new tempo only after two estimates in a row agree
+  if (T.period && Math.abs(period - T.period) < T.period * 0.04) T.period = T.period * 0.7 + period * 0.3;
+  else if (T.cand && Math.abs(period - T.cand) < T.cand * 0.04) { if (++T.candN >= 2) { T.period = period; T.cand = 0; } }
+  else { T.cand = period; T.candN = 1; }
+}
+
+// ---------------------------------------------------------------- beat prediction
+// The strips take a while to react (network + their own processing), so a
+// flash sent when a kick is heard always lands late. Once the kicks are
+// regular, track tempo and phase and fire each flash early by the measured
+// light latency so it lands on the beat. Off-grid kicks still fire as heard.
+const BT = { period: 0, next: 0, conf: 0, iois: [], lastKick: 0, firedFor: 0, lastFire: 0 };
+const LOCK = 4;                                   // matching kicks in a row before predicting
+const DETECT_MS = 25;                             // a kick is detected ~25 ms after it sounds (FFT window + peak pick)
+function beatTrack(now, kick) {
+  const lat = num('lightlat') + DETECT_MS;
+  const predicting = S.predict === 'on' && BT.conf >= LOCK;
+  let fire = false;
+  if (kick) {
+    if (BT.lastKick) {
+      const ioi = now - BT.lastKick;
+      if (ioi > 250 && ioi < 2000) { BT.iois.push(ioi); if (BT.iois.length > 8) BT.iois.shift(); }
+    }
+    BT.lastKick = now;
+    // beat length: from the onset tempo when we have one, else from kick gaps
+    let med = 0;
+    if (TEMPO.period) med = TEMPO.period;
+    else if (BT.iois.length >= 3) {
+      med = [...BT.iois].sort((a, b) => a - b)[BT.iois.length >> 1];
+      while (med < 333) med *= 2;                 // fold into 70-180 BPM
+      while (med > 857) med /= 2;
+    }
+    if (med && (!BT.period || Math.abs(med - BT.period) > BT.period * 0.06)) {
+      if (!BT.next || Math.abs(med - BT.period) > BT.period * 0.12) { BT.next = now + med; BT.conf = 0; }
+      BT.period = med;
+    }
+    let onGrid = false;
+    if (BT.period && BT.next) {
+      // error against the nearest predicted beat
+      const cand = [BT.next - BT.period, BT.next, BT.next + BT.period];
+      const near = cand.reduce((a, b) => Math.abs(now - b) < Math.abs(now - a) ? b : a);
+      const err = now - near;
+      if (Math.abs(err) < BT.period * 0.16) {
+        onGrid = true;
+        BT.conf = Math.min(BT.conf + 1, 12);
+        BT.next += err * 0.35;                    // pull the phase towards the real kick
+        BT.period += err * 0.06;                  // and nudge the tempo,
+        if (TEMPO.period) BT.period += (TEMPO.period - BT.period) * 0.25;   // anchored to the measured tempo
+      } else BT.conf = Math.max(0, BT.conf - 2);
+    }
+    // a kick the prediction already covered doesn't flash twice
+    if (!(predicting && onGrid) && now - BT.lastFire > 150) fire = true;
+  }
+  if (BT.period) {
+    while (now > BT.next + BT.period * 0.5) BT.next += BT.period;
+    // kicks stopped: unlock (allowing for songs whose kick skips beats)
+    const kickGap = BT.iois.length ? [...BT.iois].sort((a, b) => a - b)[BT.iois.length >> 1] : BT.period;
+    if (BT.lastKick && now - BT.lastKick > Math.max(BT.period, Math.min(kickGap, BT.period * 2.2)) * 1.6) BT.conf = 0;
+  }
+  if (S.predict === 'on' && BT.conf >= LOCK) {
+    const target = now >= BT.next ? BT.next + BT.period : BT.next;
+    if (now >= target - lat && BT.firedFor < target - 1) { BT.firedFor = target; fire = true; }
+  }
+  if (fire) BT.lastFire = now;
+  return fire;
+}
+
+// Light output: a few discrete commands per beat. The strip handles the fade
+// itself (gradient transition), which looks far smoother than streaming frames
+// it can't keep up with.
+function out(h, s, v, fade, delay = 0, targets) {   // targets: strip indexes, default = all selected
+  const rgb = hsv2rgb(h, s, Math.max(0.01, v)).map(Math.round);
+  const id = setTimeout(() => {
+    send({ type: 'frame', rgb, jump: !fade, dp: +S.dp, t: Date.now(), ...(targets ? { targets } : {}) });
+    if (targets && !targets.includes(activeStrips()[0])) return;  // preview mirrors the first strip
+    const p = $('#preview');
+    p.classList.toggle('fade', !!fade);
+    p.style.background = `rgb(${rgb})`;
+    p.style.boxShadow = `0 0 70px 6px rgb(${rgb})`;
+  }, delay + num('lag'));
+  if (delay) pending.push(id);
+}
+function cancelPending() { while (pending.length) clearTimeout(pending.pop()); }
+
+// ---------------------------------------------------------------- retro EQ
+// Drawn on animation frames from the latest analysis values (tick() runs on
+// the audio clock and only stores numbers, so a hidden tab costs nothing).
+const EQ = { spec: null, hz: 1, str: {}, hit: {}, bars: new Float32Array(16), caps: new Float32Array(16),
+             capT: new Float32Array(16), meter: {}, mcap: {} };
+const SEGS = 14;
+function segColour(i, n, lit) {                     // bottom 60% green, then yellow, top 20% red
+  const f = i / n;
+  const c = f < 0.6 ? [40, 230, 90] : f < 0.8 ? [250, 210, 40] : [255, 60, 50];
+  return lit ? `rgb(${c})` : `rgba(${c},0.09)`;
+}
+function fitCanvas(c) {
+  const r = c.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(r.width * d) || c.height !== Math.round(r.height * d)) {
+    c.width = Math.round(r.width * d); c.height = Math.round(r.height * d);
+  }
+  return c.getContext('2d');
+}
+function drawColumn(g, x, w, H, level, cap, n) {    // one LED column; level/cap 0..1
+  const gap = Math.max(1, H * 0.012), sh = (H - gap * (n + 1)) / n;
+  const lit = Math.round(level * n), capSeg = Math.min(n - 1, Math.round(cap * n) - 1);
+  for (let i = 0; i < n; i++) {
+    g.fillStyle = segColour(i, n, i < lit || i === capSeg);
+    g.fillRect(x, H - gap - (i + 1) * (sh + gap) + gap, w, sh);
+  }
+}
+const SPEC_EDGES = Array.from({ length: 17 }, (_, i) => 35 * Math.pow(14000 / 35, i / 16));  // log-spaced
+function drawEQ() {
+  requestAnimationFrame(drawEQ);
+  if (document.hidden) return;
+  // spectrum
+  const c = $('#spec'), g = fitCanvas(c), W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  const n = 16, pad = W * 0.02, bw = (W - pad * (n + 1)) / n, now = performance.now();
+  for (let i = 0; i < n; i++) {
+    let v = 0;
+    if (EQ.spec && S.running) {
+      const a = Math.max(1, Math.floor(SPEC_EDGES[i] / EQ.hz)), b = Math.max(a, Math.min(EQ.spec.length - 1, Math.floor(SPEC_EDGES[i + 1] / EQ.hz)));
+      for (let k = a; k <= b; k++) v = Math.max(v, EQ.spec[k]);
+      v = Math.min(1, Math.max(0, (v - 0.25) / 0.6));   // -75 dB .. -15 dB
+    }
+    EQ.bars[i] = Math.max(v, EQ.bars[i] * 0.86);
+    if (EQ.bars[i] >= EQ.caps[i]) { EQ.caps[i] = EQ.bars[i]; EQ.capT[i] = now; }
+    else if (now - EQ.capT[i] > 400) EQ.caps[i] = Math.max(0, EQ.caps[i] - 0.012);
+    drawColumn(g, pad + i * (bw + pad), bw, H, EQ.bars[i], EQ.caps[i], 12);
+  }
+  // trigger meters: strength 1.0 (the trigger point) sits where red begins
+  for (const b of BANDS) {
+    const mc = $('#m-' + b.id), mg = fitCanvas(mc), MW = mc.width, MH = mc.height;
+    mg.clearRect(0, 0, MW, MH);
+    const s = S.running ? (EQ.str[b.id] || 0) : 0; EQ.str[b.id] = 0;
+    const lvl = Math.min(1, s * 0.8);
+    EQ.meter[b.id] = Math.max(lvl, (EQ.meter[b.id] || 0) * 0.8);
+    EQ.mcap[b.id] = Math.max(EQ.meter[b.id], (EQ.mcap[b.id] || 0) - 0.01);
+    if (now - (EQ.hit[b.id] || 0) < 90) EQ.meter[b.id] = 1;       // a hit lights the whole column
+    drawColumn(mg, MW * 0.15, MW * 0.7, MH, EQ.meter[b.id], EQ.mcap[b.id], SEGS);
+  }
+}
+requestAnimationFrame(drawEQ);
+
+function flashDot(id) {                             // band id: light its meter and its group's label
+  EQ.hit[id] = performance.now();
+  const d = $('#dot-' + BAND_DEFS.find(b => b.id === id).group);
+  d.style.opacity = 1; clearTimeout(d._t); d._t = setTimeout(() => d.style.opacity = 0.15, 120);
+}
+
+// Colour for the next beat: the chosen solid colour, a slow drift round the
+// rainbow, or a step per beat.
+function beatColour() {
+  if (S.cmode === 'solid') {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt($('#pick').value.substr(i, 2), 16) / 255);
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let h = 0;
+    if (d) h = mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+    return [(h + 360) % 360, mx ? d / mx : 0];
+  }
+  if (S.cmode === 'slow') hue = (performance.now() / 1000 / num('fspeed') * 360) % 360;
+  else hue = (hue + num('hstep')) % 360;
+  return [hue, val('sat')];
+}
+
+// Kick = full flash and colour advance; snare = medium flash; hi-hat = small
+// sparkle. Snares and hats never cut into a kick's flash, and the total stays
+// within what the strips can take (~11 updates/s).
+let curHS = [0, 1], pingIdx = 0, swapFlip = false;
+const CONTINUOUS = new Set(['spectrum', 'wave', 'vu', 'breathe', 'fire']);
+function onHit(kind) {
+  const now = performance.now(), maxb = val('maxb'), floor = val('floor');
+  if (kind !== 'kick' && (now - lastKickOut < 200 || now - lastOut < 150)) return;
+  if (CONTINUOUS.has(S.mode) || PAINT.has(S.mode)) {
+    if (kind === 'kick') curHS = beatColour();
+    return;                       // spectrum/wave use the kick via continuous()
+  }
+  cancelPending();
+  lastOut = now;
+  if (kind === 'kick') { lastKickOut = now; curHS = beatColour(); }
+  const [h, s] = curHS;
+  if (S.mode === 'strobe') {
+    if (kind !== 'kick') return;
+    out(h, s * 0.5, maxb, false);
+    out(h, s, floor * maxb * 0.5, false, 80);
+    return;
+  }
+  if (S.mode === 'bands') {       // each drum its own colour: kick = main colour, snare = opposite colour, hats = white
+    const [bh, bs, bv, hold] = kind === 'kick' ? [h, s, 1, 260]
+                             : kind === 'snare' ? [(h + 180) % 360, s, 0.85, 180]
+                             : kind === 'mid' ? [(h + 90) % 360, s, 0.7, 160] : [0, 0, 0.5, 90];
+    out(bh, bs, maxb * bv, false);
+    out(bh, bs, floor * maxb, false, hold);
+    return;
+  }
+  const strips = activeStrips();
+  if (S.mode === 'ping' && strips.length > 1) {   // beats bounce from strip to strip
+    if (kind === 'hat') return;
+    pingIdx = (pingIdx + 1) % strips.length;
+    const on = strips[pingIdx], others = strips.filter(i => i !== on);
+    out(h, s, maxb * (kind === 'kick' ? 1 : 0.7), false, 0, [on]);
+    out(h, s, floor * maxb, false, 0, others);
+    out(h, s, floor * maxb, false, 220, [on]);
+    return;
+  }
+  if (S.mode === 'swap') {        // two colours that trade places on every kick (with two strips, each holds one)
+    if (kind !== 'kick') return;
+    swapFlip = !swapFlip;
+    const a = (h + (swapFlip ? 0 : 180)) % 360, b = (a + 180) % 360;
+    if (strips.length > 1) {
+      out(a, s, maxb, false, 0, strips.filter((_, i) => i % 2 === 0));
+      out(b, s, maxb, false, 0, strips.filter((_, i) => i % 2 === 1));
+    } else out(a, s, maxb, false);
+    return;
+  }
+  if (kind === 'kick') {          // flash, then step down (colour mode has no on-strip fade)
+    out(h, s, maxb, false);
+    out(h, s, maxb * 0.4, false, 120);
+    out(h, s, floor * maxb, false, 260);
+  } else if (kind === 'snare') {
+    out(h, s, maxb * 0.65, false);
+    out(h, s, floor * maxb, false, 140);
+  } else if (kind === 'mid') {    // basslines, vocals, chords: a softer swell
+    out(h, s, maxb * 0.5, false);
+    out(h, s, floor * maxb, false, 160);
+  } else {
+    out(h, s * 0.7, maxb * 0.35, false);
+    out(h, s, floor * maxb, false, 90);
+  }
+}
+
+// Envelopes for the continuous effects (updated every audio block)
+const ENV = { level: 0, bass: 0, bassPeak: 1e-3, fire: 0 };
+function updateEnv(loud, spec, hz) {
+  const a = Math.max(1, Math.floor(35 / hz)), b = Math.ceil(120 / hz);
+  let bass = 0; for (let i = a; i <= b; i++) bass += spec[i]; bass /= (b - a + 1);
+  ENV.bassPeak = Math.max(bass, ENV.bassPeak * 0.999, 1e-3);
+  const bn = Math.min(1, Math.max(0, (bass - 0.3) / Math.max(0.05, ENV.bassPeak - 0.3)));
+  // fast attack, slower release, like a VU needle
+  ENV.level += (loud - ENV.level) * (loud > ENV.level ? 0.5 : 0.06);
+  ENV.bass += (bn - ENV.bass) * (bn > ENV.bass ? 0.6 : 0.08);
+}
+
+function continuous(now, loud, beat) {
+  // ~6 updates/s, plus an accent on each beat
+  const maxb = val('maxb'), floor = val('floor'), sat = val('sat');
+  if (S.mode === 'vu') {            // whole strip as a VU meter: green -> yellow -> red, white when clipping
+    if (now - lastCont < 120) return;
+    lastCont = now;
+    const l = Math.min(1, ENV.level * 1.1);
+    out(120 * (1 - l), l > 0.93 ? 0.35 : 1, (0.25 + 0.75 * l) * maxb, false);
+    return;
+  }
+  if (S.mode === 'breathe') {       // brightness rides the bassline; colour from the Colour setting
+    if (now - lastCont < 120) return;
+    lastCont = now;
+    const [h, s] = beatColour();
+    out(h, s, (floor + (1 - floor) * ENV.bass) * maxb, false);
+    return;
+  }
+  if (S.mode === 'fire') {          // warm flicker that burns hotter with the music; kicks flare up
+    if (beat) { out(40, 0.7, maxb, false); lastCont = now; return; }
+    if (now - lastCont < 140) return;
+    lastCont = now;
+    const heat = 0.3 + 0.7 * ENV.level;
+    out(Math.random() * 28 * heat, 1, heat * (0.55 + 0.45 * Math.random()) * maxb, false);
+    return;
+  }
+  if (S.mode === 'wave') hue = (hue + 0.15 + loud * 0.8 + (beat ? num('hstep') : 0)) % 360;
+  if (S.mode === 'spectrum') {
+    const lo = band(40, 250), mid = band(250, 2000), hi = band(2000, 9000), t = lo + mid + hi + 1e-6;
+    const target = (mid / t) * 140 + (hi / t) * 260;   // bass-heavy = red, bright/hi-hat = blue
+    hue += (target - hue) * 0.05;
+  }
+  if (beat) { out(hue, sat, maxb, false); lastCont = now; return; }
+  if (now - lastCont < 160) return;
+  lastCont = now;
+  out(hue, sat, (floor + (1 - floor) * loud * 0.7) * maxb, true);
+}
+
+// ---------------------------------------------------------------- segment effects
+// These use the strips' 15 segments (DP 51). Static paints one colour per
+// segment; "stream" and the built-in animations run on the strip itself, so
+// they stay smooth while we only change colours, speed and brightness.
+const PAINT = new Set(['eqbar', 'specbar', 'stream', 'anim']);
+const SEG = 15;
+var lastPaint = 0, lastAnimKey = '', SPECBAR = [];   // var: noteMode() resets these during page setup
+
+function paint(anim, speed, bright, colours, delay = 0) {   // colours: [[hue 0-359, sat 0-100], ...]
+  const id = setTimeout(() => {
+    send({ type: 'frame', anim, speed: Math.round(speed), bright: Math.round(bright),
+           colours: colours.map(([h, s]) => [Math.round(h), Math.round(s)]),
+           reverse: S.dir === 'rev', t: Date.now() });
+    const css = colours.map(([h, s]) => `rgb(${hsv2rgb(h, s / 100, Math.max(0.15, bright / 100)).map(Math.round)})`);
+    const p = $('#preview');
+    p.classList.remove('fade');
+    p.style.background = css.length > 1 ? `linear-gradient(90deg, ${css.join(',')})` : css[0];
+    p.style.boxShadow = `0 0 70px 6px ${css[Math.floor(css.length / 2)]}`;
+  }, delay + num('lag'));
+  if (delay) pending.push(id);
+}
+
+function palette() {               // colours for streams/animations, from the Colour setting
+  const [h, s] = curHS, sp = s * 100;
+  return S.cmode === 'solid' ? [[h, sp]] : [[h, sp], [(h + 120) % 360, sp], [(h + 240) % 360, sp]];
+}
+
+function paintFx(now, spec, hz, hits) {
+  const maxb = val('maxb') * 100, floor = val('floor');
+  // The controller takes 15 segments but a shorter strip only shows the first
+  // few (the user's 90-LED strips show 10), so effects are fitted to that.
+  const vis = Math.max(2, Math.min(SEG, num('visseg')));
+  const pad = cols => { while (cols.length < SEG) cols.push(cols[cols.length - 1]); return cols; };
+  // "From centre" builds half a bar and mirrors it out to both ends
+  const centre = S.layout === 'centre';
+  const span = centre ? Math.ceil(vis / 2) : vis;
+  const arrange = cols => centre ? [...cols.slice(vis % 2).reverse(), ...cols] : cols;
+  if (S.mode === 'eqbar') {        // level meter along the strip: bar grows from the controller end
+    if (now - lastPaint < 110) return;
+    lastPaint = now;
+    // segments can't be switched off, so unlit ones are blue: it can't be
+    // confused with the green/yellow/red of the bar
+    // level is relative to the recent loudest moment, so it rarely reaches 1;
+    // the curve lets loud passages reach the red end and quiet ones fall back
+    const lit = Math.round(Math.min(1, Math.pow(ENV.level, 0.8) * (centre ? 1.2 : 1.35)) * span);
+    const cols = [];
+    // solid zones like a retro meter: 60% green, 20% yellow, 20% red (a smooth
+    // green-to-red fade reads as mostly yellow on these LEDs). Each half of the
+    // centre layout is short, so it gets 40/40/20 or it would be mostly green.
+    const [gz, yz] = centre ? [0.4, 0.8] : [0.6, 0.8];
+    const zone = i => i < Math.round(span * gz) ? 120 : i < Math.round(span * yz) ? 50 : 0;
+    for (let i = 0; i < span; i++) cols.push(i < lit ? [zone(i), 100] : [235, 100]);
+    paint(0, 50, maxb, pad(arrange(cols)));
+    return;
+  }
+  if (S.mode === 'specbar') {      // spectrum along the strip: bass at the controller end, treble at the far end
+    if (now - lastPaint < 110) return;
+    lastPaint = now;
+    const cols = [];
+    const edge = i => 40 * Math.pow(12000 / 40, i / span);  // log-spaced bands, one per segment
+    for (let i = 0; i < span; i++) {
+      const a = Math.max(1, Math.floor(edge(i) / hz)), b = Math.max(a, Math.floor(edge(i + 1) / hz));
+      let v = 0; for (let k = a; k <= b && k < spec.length; k++) v += spec[k];
+      v /= (b - a + 1);
+      // each band against its own recent range, so treble shows as well as bass
+      const bs = SPECBAR[i] || (SPECBAR[i] = { lo: v, hi: v + 0.05, out: 0 });
+      bs.hi = Math.max(v, bs.hi - 0.0015); bs.lo = Math.min(v, bs.lo + 0.0015);
+      const n = Math.min(1, Math.max(0, (v - bs.lo) / Math.max(0.06, bs.hi - bs.lo)));
+      bs.out += (n - bs.out) * (n > bs.out ? 0.7 : 0.18);       // jump up, fall back slowly
+      cols.push([(240 + 120 * bs.out) % 360, 100]);             // blue -> purple -> pink -> red
+    }
+    paint(0, 50, maxb, pad(arrange(cols)));
+    return;
+  }
+  // stream / built-in animation. Every command restarts the strip's
+  // animation, so only send when re-firing (every kick / every 4 kicks) or
+  // when a setting changes; in between the strip animates on its own.
+  const speed = Math.min(100, num('aspeed') * (0.6 + 0.8 * ENV.level));
+  const anim = S.mode === 'stream' ? 0x0a : +S.anim;
+  const key = anim + S.cmode + S.dir + S.refire + num('aspeed') + num('maxb');
+  if (hits.kick) kickCount++;
+  const refire = hits.kick && (S.refire === 'kick' || (S.refire === 'bar' && kickCount % 4 === 0));
+  if (refire || key !== lastAnimKey) {
+    cancelPending();
+    paint(anim, speed, maxb, palette());
+    if (refire && S.pulse === 'on') paint(anim, speed, maxb * Math.max(0.35, floor * 3), palette(), 220);
+    lastPaint = now; lastAnimKey = key;
+  }
+}
+var kickCount = 0;
+
+// ---------------------------------------------------------------- sync test
+// Clicks are scheduled on the audio clock; each flash is fired from a timer
+// aimed at the same moment, so any offset you see comes from the strips.
+let test = null;
+function startTest() {
+  const c = new (window.AudioContext || window.webkitAudioContext)();
+  const period = 0.5, t0 = c.currentTime + 0.3;
+  let n = 0;
+  test = { c, timer: null };
+  const schedule = () => {
+    while (t0 + n * period < c.currentTime + 1.0) {   // keep 1 s of clicks queued
+      const at = t0 + n * period, accent = n % 4 === 0;
+      const o = c.createOscillator(), g = c.createGain();
+      o.frequency.value = accent ? 1500 : 1000;
+      g.gain.setValueAtTime(0.5, at); g.gain.exponentialRampToValueAtTime(0.001, at + 0.05);
+      o.connect(g); g.connect(c.destination); o.start(at); o.stop(at + 0.06);
+      const ms = (at - c.currentTime) * 1000;
+      const h = S.tcol === 'one' || accent ? 0 : 220;
+      setTimeout(() => {
+        if (!test) return;
+        out(h, 1, val('maxb'), false);
+        if (S.tfade === 'fade') out(h, 1, val('floor') * val('maxb'), true, 110);
+        else out(h, 1, 0.05, false, 150);
+      }, ms + (c.outputLatency || c.baseLatency || 0) * 1000 - num('lightlat'));   // fire early by the light latency; out() adds the Delay slider
+      n++;
+    }
+  };
+  schedule();
+  test.timer = setInterval(schedule, 200);
+  send({ type: 'cmd', cmd: 'on' });
+  $('#testBtn').textContent = 'Stop sync test'; $('#testBtn').classList.add('stop');
+}
+function stopTest() {
+  if (!test) return;
+  clearInterval(test.timer); test.c.close(); test = null;
+  $('#testBtn').textContent = 'Start sync test'; $('#testBtn').classList.remove('stop');
+}
+$('#testBtn').addEventListener('click', () => test ? stopTest() : startTest());
+
+function hsv2rgb(h, s, v) {
+  const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  return [f(5) * 255, f(3) * 255, f(1) * 255];
+}
+</script>
+</body>
+</html>
